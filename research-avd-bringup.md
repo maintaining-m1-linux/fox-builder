@@ -100,14 +100,48 @@ Findings:
 6. m1n1 is a hand-installed custom build (2026-09-27) at
    /usr/local/lib/m1n1/m1n1.bin; the dpkg m1n1 is 1.4.21-3.
 
+## Boot-time forensics (dbg3 kernel, definitive)
+
+A kernel with `AVDBG boot` prints + a modified avd-fw that writes the
+FLAG0 ack as its *first instruction* produced:
+
+```
+fw[0..2]=000007c0 00000001 00000838  rb=000007c0 00000001 00000838  rst=0
+run_ctrl rb=00000001
+TIMEOUT flag0=00000000
+```
+
+i.e. the firmware image lands in SRAM byte-identical (readback
+verified), the reset framework reports deasserted, RUN_CTRL writes and
+reads back — and the CM3 still never executes the first instruction.
+Every software-side prerequisite checked out; the coprocessor core is
+not starting. No unexplored CM3 clock/enable register exists in either
+the driver's or the firmware's register map.
+
+Conclusion: on this j293 unit the AVD coprocessor does not start under
+the Linux stack for a reason not observable from driver/firmware level
+(candidates: a clock/provisioning step performed by macOS's AppleAVD
+init or the SMC that this stack doesn't replicate; or a board-level
+difference vs the working j274 reference). Next progress requires
+either a working j293 comparison dump, or reverse-engineering macOS's
+AVD init sequence.
+
+## Firmware baseline (fixed)
+
+Captured at install time (2026-09-25) from the machine's own ESP:
+**macOS 13.5, build 22G74, RestoreVersion 22.7.74.0.0** (Ventura-era).
+This is the supported reference for the stack below — work against this
+baseline and document deviations; do not require firmware upgrades.
+
+- m1n1: hand-installed custom build (2026-09-27) at
+  /usr/local/lib/m1n1/m1n1.bin; dpkg has 1.4.21-3 (unused).
+- boot.bin embeds the vendorfw cpio from the baseline above.
+
 ## Next candidates
 
-1. **Vendor firmware refresh via macOS** (strongest): boot macOS, apply
-   any SMC/firmware updates, then re-run the Asahi installer's firmware
-   collection (or refresh all_firmware.tar.gz) and regenerate m1n1's
-   boot.bin. The boot log shows `apple-pmgr ... always-on domain msg is
-   not on at boot`, i.e. the pmgr messaging was unhealthy from the start
-   — consistent with stale SMC-side firmware.
-2. Update m1n1 to latest.
-3. Find another j293 owner with working AVD to compare register dumps
-   (esp. bit 13 and the `hw version` read).
+1. **In-branch analysis of the avd-fw boot requirements** (active):
+   read the firmware's startup sequence against `avd-regs.h` to find any
+   clock/enable poke the driver must perform before RUN on this silicon.
+2. Compare register dumps (pmgr 0x400/0x410, ctrl hw-version read) with
+   a working machine of any model — held in-branch until data exists.
+3. Update m1n1 to latest (cheap, minor hope).
