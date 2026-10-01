@@ -1,0 +1,98 @@
+#!/bin/bash
+# build-ffmpeg-avd — build ffmpeg with the v4l2-request hwaccel, the userspace
+# translation layer that drives the Apple AVD (S264/S265/VP9F stateless API).
+#
+# Recipe: Kwiboo/FFmpeg branch v4l2-request-n8.1 @ b57fbbe, as validated by
+# aquarat/frigate-asahi (src/ffmpeg-vulkan). Static, private install under
+# ~/.local/opt/ffmpeg-avd — your distro ffmpeg is untouched.
+#
+# Requires: AVD firmware (./setup-avd-fw) and a kernel whose apple-avd driver
+# exposes the stateless formats (fairydust kernels carry the frigate-asahi
+# decode-stability patch series).
+#
+# Usage:
+#   ./build-ffmpeg-avd           build (idempotent) + self-test on AVD
+#   ./build-ffmpeg-avd --force   rebuild from scratch
+set -euo pipefail
+
+PREFIX="$HOME/.local/opt/ffmpeg-avd"
+SRC="$HOME/build/FFmpeg"
+PIN="b57fbbe50c9b2656fad86a1a7eeabfd2b2a50935"
+BRANCH="v4l2-request-n8.1"
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+
+log() { echo "[build-ffmpeg-avd] $*"; }
+
+# --- memory-aware parallelism (same rule as installfox) --------------------
+MEM_GB=$(awk '/^MemTotal/ {print int($2/1048576)}' /proc/meminfo)
+JOBS="${JOBS:-$(( MEM_GB / 2 ))}"
+[ "$JOBS" -lt 1 ] && JOBS=1
+NPROC=$(nproc); [ "$JOBS" -gt "$NPROC" ] && JOBS=$NPROC
+
+if [ "$FORCE" -eq 0 ] && [ -x "$PREFIX/bin/ffmpeg" ]; then
+    log "already built: $($PREFIX/bin/ffmpeg -version 2>/dev/null | head -1)"
+    echo "  use --force to rebuild"
+    exit 0
+fi
+
+# --- dependencies ----------------------------------------------------------
+missing=""
+for t in git pkg-config make gcc; do
+    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+for pc in libdrm libudev; do
+    pkg-config --exists "$pc" 2>/dev/null || missing="$missing $pc-dev"
+done
+if [ -n "$missing" ]; then
+    log "missing:$missing"
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config git libdrm-dev libudev-dev
+    else
+        log "install equivalents with your package manager and re-run."
+        exit 1
+    fi
+fi
+
+# --- source ----------------------------------------------------------------
+mkdir -p "$HOME/build"
+if [ -d "$SRC/.git" ]; then
+    log "updating existing clone"
+    git -C "$SRC" fetch -q --depth 1 origin "$BRANCH"
+else
+    log "cloning Kwiboo/FFmpeg ($BRANCH)"
+    rm -rf "$SRC"
+    git clone -q --depth 1 --branch "$BRANCH" https://github.com/Kwiboo/FFmpeg.git "$SRC"
+fi
+git -C "$SRC" checkout -q "$PIN"
+
+# --- build -----------------------------------------------------------------
+log "configuring (v4l2-request, static)"
+(
+    cd "$SRC"
+    ./configure --prefix="$PREFIX" --enable-gpl --enable-static --disable-shared \
+        --disable-doc --disable-debug \
+        --enable-libdrm --enable-libudev --enable-v4l2-request \
+        --extra-version=avd-"${PIN:0:7}"
+    make -j"$JOBS"
+    make install
+)
+log "installed: $PREFIX/bin/ffmpeg"
+
+# --- self-test on the AVD --------------------------------------------------
+log "self-test: decode a generated H.264 clip with -hwaccel v4l2request"
+CLIP=$(mktemp --suffix=.mp4)
+trap 'rm -f "$CLIP"' EXIT
+if command -v ffmpeg >/dev/null 2>&1; then HOSTFF=ffmpeg; else HOSTFF="$PREFIX/bin/ffmpeg"; fi
+"$HOSTFF" -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=30:duration=2 \
+    -c:v libx264 -pix_fmt yuv420p -y "$CLIP" 2>/dev/null || {
+        log "could not generate test clip (need an encoder ffmpeg)"; exit 0; }
+if timeout 60 "$PREFIX/bin/ffmpeg" -hide_banner -loglevel info \
+        -hwaccel v4l2request -i "$CLIP" -f null - 2>&1 | grep -q 'v4l2request'; then
+    log "SELF-TEST PASSED: AVD hardware decode is working."
+else
+    log "SELF-TEST INCONCLUSIVE — run manually:"
+    echo "  $PREFIX/bin/ffmpeg -hwaccel v4l2request -i <clip.mp4> -f null -"
+    echo "  and watch 'sudo dmesg -w' for avd messages."
+fi

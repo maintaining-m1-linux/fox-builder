@@ -88,6 +88,33 @@ set `media.hardware-video-decoding.force-enabled = true` in `about:config`
 (the automated gfx test is known to fail on Asahi) and check
 `about:support` → Media: H264 should show hardware decoding supported.
 
+## AVD hardware decode (local playback)
+
+Firefox hw decode note: Gecko's Linux V4L2 path only speaks the *stateful*
+m2m API (`H264`), while `apple-avd` implements the *stateless* slice API
+(`S264`/`S265`/`VP9F` + Request API) — so web video in Firefox stays
+software-decoded for now. Hardware decode works today through the
+stateless-native stack:
+
+1. `./setup-avd-fw` — AVD firmware (see above), then reboot so AVD owns
+   `/dev/media0` + `/dev/video0`.
+2. Kernel: the fairydust kernel branch carries the
+   [frigate-asahi](https://github.com/aquarat/frigate-asahi) AVD
+   decode-stability patch series (upstream 7.1.13 already contains most of
+   it; the branch tracks the rest).
+3. `./build-ffmpeg-avd` — builds Kwiboo's `v4l2-request` ffmpeg (the
+   Annex-B → stateless translation layer) into `~/.local/opt/ffmpeg-avd`,
+   with a self-test against the live AVD.
+
+Then e.g.:
+
+```sh
+~/.local/opt/ffmpeg-avd/bin/ffmpeg -hwaccel v4l2request -i clip.mp4 -f null -
+```
+
+GStreamer (`v4l2slh264dec`) also speaks the stateless API natively, so
+gst-based players work too.
+
 ## Installed layout
 
 Everything lives inside `$HOME` (no root needed):
