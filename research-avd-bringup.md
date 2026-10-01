@@ -64,16 +64,50 @@ aquarat/frigate-asahi reports AVD hw decode working on a **Mac mini M1
 (j274)** with Fedora kernel 7.1.6-400 + the same firmware binary. The
 failure on this j293 unit is therefore machine/environment-specific.
 
-## Next candidates (untested)
+## j293-specific debugging (this machine)
 
-1. **m1n1 version** — this machine uses a hand-installed
-   `/usr/local/lib/m1n1/m1n1.bin`; update-m1n1 regenerates boot.bin from
-   it. Early coprocessor/SMC bring-up is m1n1's job; try the latest
-   Asahi m1n1.
-2. **Vendor firmware refresh** — the ESP `vendorfw` capture on this
-   machine predates AVF and cannot be refreshed without re-running
-   collection from macOS.
-3. **j293 vs j274 delta** — SMC-side handling of the `ps_avd_sys` power
-   state may differ per model; needs someone with a working j293 to
-   compare `dmesg` (especially the apple-pmgr "always-on domain msg" and
-   RTKit init lines).
+Instrumentation commits on the fairydust branch (AVDBG prints):
+- `avd_boot()`: fw size, hw version read, FLAG0/mbox at timeout
+- `rpm_callback()` (runtime.c): print + dump_stack when power.runtime_error
+  is recorded
+- `rpm_resume()`: print on the sticky-error branch
+- `_genpd_power_on()`, `apple_pmgr_ps_power_on()`, `apple_pmgr_ps_set()`:
+  result + register dump
+
+Findings:
+
+1. The recurring **-EINVAL (-22) from pm_runtime_resume_and_get() is a
+   red herring**: `rpm_resume()` (drivers/base/power/runtime.c) returns a
+   hardcoded -EINVAL whenever a sticky `power.runtime_error` is set. The
+   original error is the **firmware boot timeout (-110)**, recorded once
+   by `rpm_callback()`; every later resume just returns -22.
+2. The **power domain is fully functional**: `apple_pmgr_ps_set()` trace
+   shows `avd_sys` reaching PS_ACTUAL=0xf (ACTIVE) on resume and 0 at
+   idle, `power_on` ret=0. genpd resume succeeds before the driver
+   callback runs.
+3. Primary failure unchanged: after the domain is ACTIVE, the CM3
+   firmware never sets FLAG0 within 10 ms. The `ctrl` region reads
+   hw version 0x0000; the mbox registers return varying non-zero values.
+4. Secondary (noise): under rapid open/close cycling, suspend-side
+   `ps_set(PWRGATE)` occasionally times out (100 µs poll) and records
+   -110 again. Bit 13 (0x2000) of the avd_sys pmgr register is set at
+   all times; meaning unknown (not defined in the Linux driver).
+5. `asahi-fwupdate` re-extraction is a no-op: the ESP capture
+   (`all_firmware.tar.gz`, 2026-09-25) predates AVF and is the only
+   source. macOS partitions still exist on nvme0n1 (p1-p3), so a
+   firmware refresh is possible by booting macOS and re-running
+   collection.
+6. m1n1 is a hand-installed custom build (2026-09-27) at
+   /usr/local/lib/m1n1/m1n1.bin; the dpkg m1n1 is 1.4.21-3.
+
+## Next candidates
+
+1. **Vendor firmware refresh via macOS** (strongest): boot macOS, apply
+   any SMC/firmware updates, then re-run the Asahi installer's firmware
+   collection (or refresh all_firmware.tar.gz) and regenerate m1n1's
+   boot.bin. The boot log shows `apple-pmgr ... always-on domain msg is
+   not on at boot`, i.e. the pmgr messaging was unhealthy from the start
+   — consistent with stale SMC-side firmware.
+2. Update m1n1 to latest.
+3. Find another j293 owner with working AVD to compare register dumps
+   (esp. bit 13 and the `hw version` read).
