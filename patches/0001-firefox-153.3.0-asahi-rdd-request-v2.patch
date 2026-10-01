@@ -1,0 +1,53 @@
+--- a/security/sandbox/linux/broker/SandboxBrokerPolicyFactory.cpp
++++ b/security/sandbox/linux/broker/SandboxBrokerPolicyFactory.cpp
+@@ -968,6 +968,19 @@
+ SandboxBrokerPolicyFactory::GetRDDPolicy(int aPid) {
+   auto policy = MakeUnique<SandboxBroker::Policy>();
+ 
++#if defined(__aarch64__) && defined(MOZ_ENABLE_V4L2)
++  // Local Asahi AVD policy: these nodes were verified on this machine.
++  // Keep the exception in RDD and do not grant access to other media devices.
++  policy->AddPath(rdwr, "/dev/media0");
++  policy->AddPath(rdwr, "/dev/video0");
++  // Read only the AVD uevent metadata needed to resolve its video node.
++  // Include both the lookup path and the canonical path seen by the broker.
++  policy->AddPath(rdonly, "/sys/dev/char/81:0/uevent");
++  policy->AddPath(
++      rdonly,
++      "/sys/devices/platform/soc/269080000.avd/video4linux/video0/uevent");
++#endif
++
+   AddSharedMemoryPaths(policy.get(), aPid);
+ 
+   policy->AddPath(rdonly, "/dev/urandom");
+--- a/security/sandbox/linux/SandboxFilter.cpp
++++ b/security/sandbox/linux/SandboxFilter.cpp
+@@ -10,6 +10,9 @@
+ #include <fcntl.h>
+ #include <linux/ioctl.h>
+ #include <linux/ipc.h>
++#if defined(__aarch64__) && defined(MOZ_ENABLE_V4L2)
++#  include <linux/media.h>
++#endif
+ #include <linux/memfd.h>
+ #include <linux/mman.h>
+ #include <linux/net.h>
+@@ -2100,6 +2103,18 @@
+ #endif
+ #ifdef MOZ_ENABLE_V4L2
+             .ElseIf(shifted_type == kVideoType, Allow())
++#  if defined(__aarch64__)
++            // V4L2 Request decoding: query the media device and manage requests.
++            // Do not allow the whole Media Controller ioctl namespace.
++            .ElseIf(AnyOf(request == MEDIA_IOC_DEVICE_INFO,
++                          request == MEDIA_IOC_ENUM_ENTITIES,
++                          request == MEDIA_IOC_ENUM_LINKS,
++                          request == MEDIA_IOC_G_TOPOLOGY,
++                          request == MEDIA_IOC_REQUEST_ALLOC,
++                          request == MEDIA_REQUEST_IOC_QUEUE,
++                          request == MEDIA_REQUEST_IOC_REINIT),
++                    Allow())
++#  endif
+ #endif
+         // NVIDIA decoder from Linux4Tegra, this is specific to Tegra ARM64 SoC
+ #if defined(__aarch64__)

@@ -1,0 +1,224 @@
+#!/bin/bash
+# installfox — reproducible on-demand builder/installer for "Firefox (AVD)"
+# on Asahi Linux (Apple Silicon).
+#
+# Builds Mozilla Firefox stable from source with the Asahi AVD V4L2 RDD
+# sandbox patch applied, using unofficial branding, and installs it as a
+# separate application alongside any distro-packaged Firefox. It never
+# touches /usr/bin/firefox or the Mozilla apt package.
+#
+# The in-app updater is disabled on purpose: Firefox auto-update would
+# replace the patched build with stock Mozilla binaries. Re-run this
+# script whenever you want to move to a newer release.
+#
+# Usage:
+#   ./installfox                 build latest stable release (if not installed)
+#   ./installfox --force         rebuild even if the same version is installed
+#   ./installfox --version X.Y.Z build a specific release
+#   KEEP_WORKDIR=1 ./installfox  keep the source/objdir after a successful build
+#
+# Environment overrides:
+#   PATCH=/path/to/patch   AVD RDD sandbox patch (default: bundled/downloaded)
+#   ICON=/path/to/icon.png Application icon (default: bundled/downloaded)
+#
+set -euo pipefail
+
+# --- locate bundled resources (repo clone) or fall back to downloads ------
+SELF="$0"
+[ -L "$SELF" ] && SELF=$(readlink -f "$SELF")
+if [[ "$SELF" != /dev/fd/* && -f "$SELF" ]]; then
+    SCRIPT_DIR=$(cd "$(dirname "$SELF")" && pwd)
+else
+    SCRIPT_DIR=""    # executed via curl | bash
+fi
+CACHE="$HOME/.cache/fox-builder"
+mkdir -p "$CACHE"
+
+fetch_to() { # fetch_to <url> <dest>
+    [ -s "$2" ] || curl -fL -o "$2" "$1"
+}
+
+RAWBASE="https://raw.githubusercontent.com/maintaining-m1-linux/fox-builder/main"
+
+PATCH_NAME="0001-firefox-153.3.0-asahi-rdd-request-v2.patch"
+PATCH="${PATCH:-}"
+if [ -z "$PATCH" ]; then
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/patches/$PATCH_NAME" ]; then
+        PATCH="$SCRIPT_DIR/patches/$PATCH_NAME"
+    else
+        PATCH="$CACHE/$PATCH_NAME"
+        fetch_to "$RAWBASE/patches/$PATCH_NAME" "$PATCH"
+    fi
+fi
+
+ICON="${ICON:-}"
+if [ -z "$ICON" ]; then
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/assets/icon.png" ]; then
+        ICON="$SCRIPT_DIR/assets/icon.png"
+    else
+        ICON="$CACHE/icon.png"
+        fetch_to "$RAWBASE/assets/icon.png" "$ICON" || ICON=""
+    fi
+fi
+
+WORKBASE="$HOME/build/firefox-avd"
+DLDIR="$HOME/build/dl"
+PREFIX="$HOME/.local/opt/firefox-avd"
+DESKTOP_FILE="$HOME/.local/share/applications/firefox-avd.desktop"
+ICON_THEME="$HOME/.local/share/icons/hicolor"
+LOG="$HOME/build/installfox.log"
+PROFILE_DIR="$HOME/.mozilla/firefox-avd"
+
+FORCE=0
+VER=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force) FORCE=1 ;;
+        --version) VER="$2"; shift ;;
+        --version=*) VER="${1#*=}" ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+log() { echo "[installfox $(date +%H:%M:%S)] $*"; }
+
+# --- 1. resolve version ---------------------------------------------------
+if [ -z "$VER" ]; then
+    VER=$(curl -s https://product-details.mozilla.org/1.0/firefox_versions.json \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["LATEST_FIREFOX_VERSION"])')
+fi
+log "target version: $VER"
+
+INSTALLED=""
+[ -f "$PREFIX/.installfox-version" ] && INSTALLED=$(cat "$PREFIX/.installfox-version")
+if [ "$FORCE" -eq 0 ] && [ -n "$INSTALLED" ] && [ "$INSTALLED" = "$VER" ]; then
+    log "Firefox (AVD) $VER is already installed. Use --force to rebuild."
+    exit 0
+fi
+[ -n "$INSTALLED" ] && log "installed: $INSTALLED -> rebuilding $VER"
+
+# --- 2. fetch source ------------------------------------------------------
+TARBALL="$DLDIR/firefox-$VER.source.tar.xz"
+mkdir -p "$DLDIR" "$WORKBASE"
+if [ ! -s "$TARBALL" ] || [ "$(stat -c%s "$TARBALL")" -lt 100000000 ]; then
+    log "downloading firefox-$VER source..."
+    curl -fL -C - -o "$TARBALL" \
+        "https://archive.mozilla.org/pub/firefox/releases/$VER/source/firefox-$VER.source.tar.xz"
+fi
+log "tarball: $(du -h "$TARBALL" | cut -f1)"
+
+# --- 3. extract + patch ---------------------------------------------------
+SRC="$WORKBASE/src-$VER"
+rm -rf "$SRC"
+mkdir -p "$SRC"
+log "extracting..."
+tar -xf "$TARBALL" -C "$SRC"
+TOP=$(echo "$SRC"/firefox-*/)
+
+[ -f "$PATCH" ] || { log "ERROR: patch not found: $PATCH"; exit 1; }
+log "applying $(basename "$PATCH") ..."
+if ! patch -d "$TOP" -p1 --no-backup-if-mismatch -f < "$PATCH"; then
+    log "ERROR: patch failed on $VER. Try: installfox --version <older release>"
+    exit 1
+fi
+
+# --- 4. mozconfig ---------------------------------------------------------
+cat > "$TOP/mozconfig" <<EOF
+ac_add_options --enable-application=browser
+ac_add_options --with-branding=browser/branding/unofficial
+ac_add_options --disable-updater
+ac_add_options --disable-crashreporter
+ac_add_options --disable-tests
+ac_add_options --enable-optimize
+ac_add_options --disable-debug
+mk_add_options MOZ_MAKE_FLAGS="-j$(nproc)"
+EOF
+
+# --- 5. toolchain bootstrap (one-time) ------------------------------------
+if [ ! -d "$HOME/.mozbuild" ]; then
+    log "bootstrapping toolchain into ~/.mozbuild (one-time)..."
+    (cd "$TOP" && ./mach bootstrap --application-choice=browser --no-system-changes </dev/null) \
+        || log "WARNING: bootstrap had issues; continuing anyway"
+fi
+
+# --- 6. build -------------------------------------------------------------
+log "building (this takes 1.5-3 hours; log: $LOG)..."
+if ! (cd "$TOP" && ./mach build) >> "$LOG" 2>&1; then
+    log "ERROR: build failed — see $LOG (tail:)"
+    tail -20 "$LOG" || true
+    exit 1
+fi
+
+# --- 7. package -----------------------------------------------------------
+log "packaging..."
+(cd "$TOP" && ./mach package) >> "$LOG" 2>&1
+DIST=$(ls "$TOP"obj-*/dist/firefox-*.tar.* 2>/dev/null | head -1 || true)
+[ -n "$DIST" ] || { log "ERROR: dist tarball not found"; tail -20 "$LOG" || true; exit 1; }
+
+# --- 8. install ------------------------------------------------------------
+log "installing to $PREFIX ..."
+rm -rf "$PREFIX.new"
+mkdir -p "$PREFIX.new"
+tar -xf "$DIST" -C "$PREFIX.new" --strip-components=1
+echo "$VER" > "$PREFIX.new/.installfox-version"
+rm -rf "$PREFIX.old"
+[ -d "$PREFIX" ] && mv "$PREFIX" "$PREFIX.old"
+mv "$PREFIX.new" "$PREFIX"
+rm -rf "$PREFIX.old"
+
+# --- 9. icon (ImageMagick) -------------------------------------------------
+if [ -n "$ICON" ] && [ -f "$ICON" ]; then
+    log "installing icon from $ICON"
+    for s in 16 32 48 64 128 256; do
+        mkdir -p "$ICON_THEME/${s}x${s}/apps"
+        convert "$ICON" -resize "${s}x${s}" "$ICON_THEME/${s}x${s}/apps/firefox-avd.png"
+        [ -d "$PREFIX/browser/chrome/icons/default" ] && \
+            convert "$ICON" -resize "${s}x${s}" "$PREFIX/browser/chrome/icons/default/default${s}.png" || true
+    done
+    gtk-update-icon-cache -f -t "$ICON_THEME" 2>/dev/null || true
+else
+    log "WARNING: no icon found (keeping built-in unofficial branding icon)"
+fi
+
+# --- 10. desktop entry ------------------------------------------------------
+mkdir -p "$(dirname "$DESKTOP_FILE")"
+cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Firefox (AVD)
+GenericName=Web Browser
+Comment=Firefox with Asahi AVD hardware video decoding (custom build)
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd %u
+Icon=firefox-avd
+Terminal=false
+StartupNotify=true
+StartupWMClass=firefox-avd
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd --new-window %u
+
+[Desktop Action new-private-window]
+Name=Open a New Private Window
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd --private-window %u
+EOF
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+
+# --- 11. cleanup ------------------------------------------------------------
+if [ "${KEEP_WORKDIR:-0}" != "1" ]; then
+    log "removing workdir (~20GB) — set KEEP_WORKDIR=1 to keep"
+    rm -rf "$SRC"
+fi
+
+log "done: Firefox (AVD) $VER installed."
+echo
+echo "  Run it from the app launcher ('Firefox (AVD)') or:"
+echo "    env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox"
+echo "  Dedicated profile: $PROFILE_DIR (created on first run)"
+echo "  To update later, just run: installfox"
