@@ -70,6 +70,24 @@ sudo fallocate -l 8G /swapfile-fox && sudo chmod 600 /swapfile-fox
 sudo mkswap /swapfile-fox && sudo swapon /swapfile-fox
 ```
 
+## AVD firmware (one-time)
+
+Firefox needs the in-kernel `apple-avd` driver to own `/dev/media0` +
+`/dev/video0`. That requires firmware, which Asahi ships as an open-source
+MIT-licensed replacement ([AsahiLinux/avd-fw](https://github.com/AsahiLinux/avd-fw))
+— no Apple blobs, no macOS involved:
+
+```sh
+./setup-avd-fw     # build + install to /lib/firmware/apple (idempotent)
+sudo reboot        # AVD must probe before the camera ISP module
+```
+
+Verify after reboot with `v4l2-ctl --list-devices`: `avd` must be on
+`/dev/video0` (the camera moves to `/dev/video1`). Then, in Firefox (AVD),
+set `media.hardware-video-decoding.force-enabled = true` in `about:config`
+(the automated gfx test is known to fail on Asahi) and check
+`about:support` → Media: H264 should show hardware decoding supported.
+
 ## Installed layout
 
 Everything lives inside `$HOME` (no root needed):

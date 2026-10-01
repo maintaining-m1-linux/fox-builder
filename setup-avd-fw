@@ -1,0 +1,72 @@
+#!/bin/bash
+# setup-avd-fw — one-time AVD (Apple Video Decoder) firmware setup
+#
+# Builds and installs Asahi's open-source, MIT-licensed replacement firmware
+# for the Apple Video Decoder (https://github.com/AsahiLinux/avd-fw), so the
+# in-kernel `apple-avd` driver can probe at all. No Apple firmware blobs and
+# no macOS are involved.
+#
+# After this completes, REBOOT once: the built-in AVD driver must probe before
+# the camera ISP module so that AVD owns /dev/media0 + /dev/video0 (the nodes
+# the Firefox sandbox patch allows).
+#
+# Usage:  ./setup-avd-fw
+set -euo pipefail
+
+FWDIR=/lib/firmware/apple
+SRC="$HOME/build/avd-fw"
+BUILD="$HOME/build/avd-fw-build"
+
+log() { echo "[setup-avd-fw] $*"; }
+
+if [ -f "$FWDIR/avd-fw-v2-t0.bin" ] && [ -f "$FWDIR/avd-fw-v5-t0.bin" ]; then
+    log "AVD firmware already installed in $FWDIR — nothing to do."
+    echo "  (reboot if AVD does not own /dev/video0 yet)"
+    exit 0
+fi
+
+# --- build dependencies ----------------------------------------------------
+missing=""
+for t in meson ninja clang llvm-objcopy git; do
+    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+if [ -n "$missing" ]; then
+    log "missing tools:$missing"
+    if command -v apt-get >/dev/null 2>&1; then
+        log "installing via apt..."
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+            meson ninja-build clang llvm git
+    else
+        log "install the tools above with your distro's package manager and re-run."
+        exit 1
+    fi
+fi
+
+# --- fetch and build -------------------------------------------------------
+mkdir -p "$HOME/build"
+if [ -d "$SRC/.git" ]; then
+    log "updating existing clone"
+    git -C "$SRC" fetch -q --depth 1 origin main
+    git -C "$SRC" checkout -q FETCH_HEAD
+else
+    log "cloning AsahiLinux/avd-fw (main)"
+    rm -rf "$SRC"
+    git clone -q --depth 1 --branch main https://github.com/AsahiLinux/avd-fw.git "$SRC"
+fi
+
+log "building firmware images (clang -> cortex-m3)"
+rm -rf "$BUILD"
+meson setup --cross-file "$SRC/llvm.ini" --prefix=/usr \
+    -Doptimization=2 -Ddebug=false "$SRC" "$BUILD" >/dev/null
+meson compile -C "$BUILD"
+
+# --- install ---------------------------------------------------------------
+log "installing to $FWDIR (sudo)"
+sudo mkdir -p "$FWDIR"
+sudo cp "$BUILD"/*.bin "$FWDIR/"
+sudo chmod 644 "$FWDIR"/avd-fw-*.bin
+ls -la "$FWDIR"/avd-fw-*.bin
+
+log "done. Reboot now: AVD must probe before apple-isp to own /dev/video0."
+echo "  Verify after reboot:  v4l2-ctl --list-devices  (avd on /dev/video0)"
