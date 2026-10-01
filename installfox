@@ -146,6 +146,11 @@ if [ "$RESUME" -eq 0 ]; then
 fi
 TOP=$(echo "$SRC"/firefox-*/)
 
+if [ "$RESUME" -eq 1 ] && [ -f "$TOP/mozconfig" ]; then
+    sed -i -E "s/MOZ_MAKE_FLAGS=\"-j[0-9]+\"/MOZ_MAKE_FLAGS=\"-j$JOBS\"/" "$TOP/mozconfig" \
+        && log "resynced mozconfig MOZ_MAKE_FLAGS to -j$JOBS"
+fi
+
 if [ "$RESUME" -eq 0 ]; then
     [ -f "$PATCH" ] || { log "ERROR: patch not found: $PATCH"; exit 1; }
     log "applying $(basename "$PATCH") ..."
