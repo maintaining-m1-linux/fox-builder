@@ -87,10 +87,12 @@ To update later: `git pull` (picks up script/patch/icon changes), then run
 ## Files
 
 - `installfox` — the whole build+install pipeline
-- `patches/0001-firefox-153.3.0-asahi-rdd-request-v2.patch` — Asahi AVD V4L2
-  RDD sandbox policy (grants the RDD process access to `/dev/media0`,
-  `/dev/video0` and the media-controller ioctls needed for request-based
-  hardware decoding)
+- `patches/asahi-avd-rdd-request.patch` — Asahi AVD V4L2 RDD sandbox policy
+  (grants the RDD process access to `/dev/media0`, `/dev/video0` and the
+  media-controller/request ioctls needed for request-based hardware
+  decoding; defines the request-API ioctl numbers as fallbacks because
+  Mozilla's build sysroot ships a pre-request-API `<linux/media.h>` — the
+  values match the kernel uapi since v5.0 and the running kernel)
 - `assets/icon.png` — application icon (replace with your own; sized with
   ImageMagick at install time)
 

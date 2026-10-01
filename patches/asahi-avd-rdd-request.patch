@@ -1,6 +1,6 @@
 --- a/security/sandbox/linux/broker/SandboxBrokerPolicyFactory.cpp
 +++ b/security/sandbox/linux/broker/SandboxBrokerPolicyFactory.cpp
-@@ -968,6 +968,19 @@
+@@ -995,6 +995,19 @@
  SandboxBrokerPolicyFactory::GetRDDPolicy(int aPid) {
    auto policy = MakeUnique<SandboxBroker::Policy>();
  
@@ -22,17 +22,30 @@
    policy->AddPath(rdonly, "/dev/urandom");
 --- a/security/sandbox/linux/SandboxFilter.cpp
 +++ b/security/sandbox/linux/SandboxFilter.cpp
-@@ -10,6 +10,9 @@
+@@ -10,6 +10,22 @@
  #include <fcntl.h>
  #include <linux/ioctl.h>
  #include <linux/ipc.h>
 +#if defined(__aarch64__) && defined(MOZ_ENABLE_V4L2)
 +#  include <linux/media.h>
++/* Build sysroots may ship a pre-request-API <linux/media.h>. Provide
++ * fallbacks with the kernel uapi values in use since v5.0; the seccomp
++ * filter compares against the running kernel's ioctls, not the build
++ * host's headers. */
++#  ifndef MEDIA_IOC_REQUEST_ALLOC
++#    define MEDIA_IOC_REQUEST_ALLOC _IOR('|', 0x05, int)
++#  endif
++#  ifndef MEDIA_REQUEST_IOC_QUEUE
++#    define MEDIA_REQUEST_IOC_QUEUE _IO('|', 0x80)
++#  endif
++#  ifndef MEDIA_REQUEST_IOC_REINIT
++#    define MEDIA_REQUEST_IOC_REINIT _IO('|', 0x81)
++#  endif
 +#endif
  #include <linux/memfd.h>
  #include <linux/mman.h>
  #include <linux/net.h>
-@@ -2100,6 +2103,18 @@
+@@ -2125,6 +2141,18 @@
  #endif
  #ifdef MOZ_ENABLE_V4L2
              .ElseIf(shifted_type == kVideoType, Allow())

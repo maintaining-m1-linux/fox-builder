@@ -48,7 +48,7 @@ fetch_to() { # fetch_to <url> <dest>
 
 RAWBASE="https://raw.githubusercontent.com/maintaining-m1-linux/fox-builder/main"
 
-PATCH_NAME="0001-firefox-153.3.0-asahi-rdd-request-v2.patch"
+PATCH_NAME="asahi-avd-rdd-request.patch"
 PATCH="${PATCH:-}"
 if [ -z "$PATCH" ]; then
     if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/patches/$PATCH_NAME" ]; then
