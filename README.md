@@ -18,7 +18,7 @@ replace the patched build with stock Mozilla binaries. Re-running the script
   `/dev/media0` + `/dev/video0` belong to AVD — the paths hardcoded in the
   sandbox patch. If your numbering differs, adjust the paths in
   `patches/` before building.
-- ~25 GB free disk (source + objdir), 8 GB RAM (swap is fine)
+- ~25 GB free disk (source + objdir), 8 GB RAM **plus several GB of swap**
 - `python3`, `curl`, `xz`, `patch`, ImageMagick (`convert`, only used to
   install the app icon — optional)
 - C toolchain etc. is fetched automatically by `./mach bootstrap` into
@@ -48,9 +48,31 @@ cd fox-builder
 - `./installfox --force` — rebuild even if the same version is installed
 - `./installfox --version X.Y.Z` — build a specific release
 - `KEEP_WORKDIR=1 ./installfox` — keep the source/objdir (~20 GB) after success
+- `JOBS=N ./installfox` — override the automatic memory-based parallelism
 - `PATCH=/path/to/patch` / `ICON=/path/to/icon.png` — override bundled resources
 
-Installed layout, all inside `$HOME` (no root needed):
+### Memory / OOM notes
+
+Firefox release builds peak at >4 GB per compiling job, so parallelism
+defaults to **~RAM/2 capped at the core count** (e.g. `-j3` on a 7.5 GB
+machine). If memory still runs out, the symptom is
+`error: could not compile '<crate>' (lib)` caused by
+`signal: 9, SIGKILL` — the kernel OOM-killer reaping a `rustc`.
+
+Just **re-run `./installfox`** in that case: a prepared workdir
+(`src-$VERSION` with the `.installfox-prepared` marker) is detected and the
+build resumes from the existing objdir instead of starting over. If OOMs
+keep happening, lower `JOBS` further (e.g. `JOBS=2 ./installfox`) and/or add
+swap:
+
+```sh
+sudo fallocate -l 8G /swapfile-fox && sudo chmod 600 /swapfile-fox
+sudo mkswap /swapfile-fox && sudo swapon /swapfile-fox
+```
+
+## Installed layout
+
+Everything lives inside `$HOME` (no root needed):
 
 - Binary: `~/.local/opt/firefox-avd/` (version stamp: `.installfox-version`)
 - Launcher: `~/.local/share/applications/firefox-avd.desktop` ("Firefox (AVD)")

@@ -16,10 +16,18 @@
 #   ./installfox --force         rebuild even if the same version is installed
 #   ./installfox --version X.Y.Z build a specific release
 #   KEEP_WORKDIR=1 ./installfox  keep the source/objdir after a successful build
+#   JOBS=N ./installfox          override automatic parallelism
 #
 # Environment overrides:
 #   PATCH=/path/to/patch   AVD RDD sandbox patch (default: bundled/downloaded)
 #   ICON=/path/to/icon.png Application icon (default: bundled/downloaded)
+#
+# Notes:
+#   - Parallelism defaults to ~RAM/2 (capped at core count): Firefox release
+#     builds peak >4 GB per job, and rustc that gets OOM-killed shows up as
+#     "error: could not compile ... (signal: 9, SIGKILL)".
+#   - If a build dies (e.g. OOM), just re-run ./installfox: an existing
+#     prepared workdir is resumed from the objdir instead of starting over.
 #
 set -euo pipefail
 
@@ -83,6 +91,21 @@ done
 
 log() { echo "[installfox $(date +%H:%M:%S)] $*"; }
 
+# --- parallelism: memory-aware default (rustc OOM-kill guard) -------------
+# ~2 GB of RAM per compiling job; capped by core count. JOBS=N overrides.
+MEM_GB=$(awk '/^MemTotal/ {print int($2/1048576)}' /proc/meminfo)
+JOBS="${JOBS:-}"
+if [ -z "$JOBS" ]; then
+    JOBS=$(( MEM_GB / 2 ))
+    [ "$JOBS" -lt 1 ] && JOBS=1
+    NPROC=$(nproc)
+    [ "$JOBS" -gt "$NPROC" ] && JOBS=$NPROC
+fi
+log "parallelism: -j$JOBS (override with JOBS=N)"
+if [ "$MEM_GB" -lt 8 ]; then
+    log "note: ${MEM_GB} GB RAM — ensure several GB of swap are available"
+fi
+
 # --- 1. resolve version ---------------------------------------------------
 if [ -z "$VER" ]; then
     VER=$(curl -s https://product-details.mozilla.org/1.0/firefox_versions.json \
@@ -108,23 +131,31 @@ if [ ! -s "$TARBALL" ] || [ "$(stat -c%s "$TARBALL")" -lt 100000000 ]; then
 fi
 log "tarball: $(du -h "$TARBALL" | cut -f1)"
 
-# --- 3. extract + patch ---------------------------------------------------
+# --- 3. extract + patch (skipped when resuming a prepared workdir) ---------
 SRC="$WORKBASE/src-$VER"
-rm -rf "$SRC"
-mkdir -p "$SRC"
-log "extracting..."
-tar -xf "$TARBALL" -C "$SRC"
+RESUME=0
+if [ -f "$SRC/.installfox-prepared" ]; then
+    RESUME=1
+    log "resuming: reusing prepared workdir $SRC (patched source + objdir)"
+fi
+if [ "$RESUME" -eq 0 ]; then
+    rm -rf "$SRC"
+    mkdir -p "$SRC"
+    log "extracting..."
+    tar -xf "$TARBALL" -C "$SRC"
+fi
 TOP=$(echo "$SRC"/firefox-*/)
 
-[ -f "$PATCH" ] || { log "ERROR: patch not found: $PATCH"; exit 1; }
-log "applying $(basename "$PATCH") ..."
-if ! patch -d "$TOP" -p1 --no-backup-if-mismatch -f < "$PATCH"; then
-    log "ERROR: patch failed on $VER. Try: installfox --version <older release>"
-    exit 1
-fi
+if [ "$RESUME" -eq 0 ]; then
+    [ -f "$PATCH" ] || { log "ERROR: patch not found: $PATCH"; exit 1; }
+    log "applying $(basename "$PATCH") ..."
+    if ! patch -d "$TOP" -p1 --no-backup-if-mismatch -f < "$PATCH"; then
+        log "ERROR: patch failed on $VER. Try: installfox --version <older release>"
+        exit 1
+    fi
 
-# --- 4. mozconfig ---------------------------------------------------------
-cat > "$TOP/mozconfig" <<EOF
+    # --- 4. mozconfig -----------------------------------------------------
+    cat > "$TOP/mozconfig" <<MOZCFG
 ac_add_options --enable-application=browser
 ac_add_options --with-branding=browser/branding/unofficial
 ac_add_options --disable-updater
@@ -132,20 +163,22 @@ ac_add_options --disable-crashreporter
 ac_add_options --disable-tests
 ac_add_options --enable-optimize
 ac_add_options --disable-debug
-mk_add_options MOZ_MAKE_FLAGS="-j$(nproc)"
-EOF
+mk_add_options MOZ_MAKE_FLAGS="-j$JOBS"
+MOZCFG
 
-# --- 5. toolchain bootstrap (one-time) ------------------------------------
-if [ ! -d "$HOME/.mozbuild" ]; then
-    log "bootstrapping toolchain into ~/.mozbuild (one-time)..."
-    (cd "$TOP" && ./mach bootstrap --application-choice=browser --no-system-changes </dev/null) \
-        || log "WARNING: bootstrap had issues; continuing anyway"
+    # --- 5. toolchain bootstrap (one-time) --------------------------------
+    if [ ! -d "$HOME/.mozbuild" ]; then
+        log "bootstrapping toolchain into ~/.mozbuild (one-time)..."
+        (cd "$TOP" && ./mach bootstrap --application-choice=browser --no-system-changes </dev/null) \
+            || log "WARNING: bootstrap had issues; continuing anyway"
+    fi
+    touch "$SRC/.installfox-prepared"
 fi
 
 # --- 6. build -------------------------------------------------------------
 log "building (this takes 1.5-3 hours; log: $LOG)..."
 if ! (cd "$TOP" && ./mach build) >> "$LOG" 2>&1; then
-    log "ERROR: build failed — see $LOG (tail:)"
+    log "ERROR: build failed — see $LOG (tail below). Re-run installfox to resume from the existing objdir."
     tail -20 "$LOG" || true
     exit 1
 fi
