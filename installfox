@@ -204,6 +204,7 @@ rm -rf "$PREFIX.old"
 [ -d "$PREFIX" ] && mv "$PREFIX" "$PREFIX.old"
 mv "$PREFIX.new" "$PREFIX"
 rm -rf "$PREFIX.old"
+mkdir -p "$PROFILE_DIR"
 
 # --- 9. icon (ImageMagick) -------------------------------------------------
 if [ -n "$ICON" ] && [ -f "$ICON" ]; then
@@ -228,7 +229,7 @@ Type=Application
 Name=Firefox (AVD)
 GenericName=Web Browser
 Comment=Firefox with Asahi AVD hardware video decoding (custom build)
-Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd %u
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile $PROFILE_DIR %u
 Icon=firefox-avd
 Terminal=false
 StartupNotify=true
@@ -240,11 +241,11 @@ Actions=new-window;new-private-window;
 
 [Desktop Action new-window]
 Name=Open a New Window
-Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd --new-window %u
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile $PROFILE_DIR --new-window %u
 
 [Desktop Action new-private-window]
 Name=Open a New Private Window
-Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile %h/.mozilla/firefox-avd --private-window %u
+Exec=env MOZ_APP_REMOTINGNAME=firefox-avd $PREFIX/firefox -profile $PROFILE_DIR --private-window %u
 EOF
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
