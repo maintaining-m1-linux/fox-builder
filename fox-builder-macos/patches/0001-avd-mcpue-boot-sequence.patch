@@ -1,0 +1,114 @@
+From 957fa3050ee2783fcff9103e28f485d97579f31d Mon Sep 17 00:00:00 2001
+From: gg582 <gg582@proton.me>
+Date: Fri, 2 Oct 2026 21:48:01 +0900
+Subject: [PATCH] media: apple: avd: apply macOS enable/disableMCPUE sequence
+ to CM3 boot
+
+Reverse-engineered from AppleAVD.kext v865 (macOS 15.7.1, arm64e KC
+disasm; see fox-builder fox-builder-macos/AVD_LINUX_DISASM.md):
+
+CAvdMcpu::start() = disableMCPUE() -> enableMCPUE() -> WaitForM3Boot().
+The old driver only wrote MBOX1_STATUS=1, IRQ_ENABLE=NOT_EMPTY and
+RUN_CTRL=RUN before polling FLAG0.  macOS additionally clears
+RUN_CTRL/FLAG0/+0x10/+0x50 up front, then sets +0x50/+0x74/+0x68 as
+part of its coprocessor power switch.  On machines where the boot chain
+does not already have these enabled (j293 MacBookPro17,1), the CM3
+never starts without them; on j274 the writes are a no-op.
+
+Also keep the AVDBG boot readback instrumentation and the pmgr ps_set
+trace for this debug cycle.
+---
+ drivers/media/platform/apple/avd/avd-hw.c   | 26 +++++++++++++++++++++
+ drivers/media/platform/apple/avd/avd-regs.h | 11 +++++++++
+ drivers/pmdomain/apple/pmgr-pwrstate.c      |  3 +++
+ 3 files changed, 40 insertions(+)
+
+diff --git a/drivers/media/platform/apple/avd/avd-hw.c b/drivers/media/platform/apple/avd/avd-hw.c
+index cdc012b0d..a5ac5258e 100644
+--- a/drivers/media/platform/apple/avd/avd-hw.c
++++ b/drivers/media/platform/apple/avd/avd-hw.c
+@@ -2,6 +2,7 @@
+ 
+ #include "linux/dev_printk.h"
+ #include <linux/iopoll.h>
++#include <linux/reset.h>
+ 
+ #include "avd.h"
+ #include "avd-regs.h"
+@@ -49,14 +50,39 @@ int avd_boot(struct avd_dev *avd)
+ 		dev_info_once(avd->dev, "booting hw version: %04x",
+ 				readl_relaxed(avd->ctrl));
+ 
++	/* Quiesce the coprocessor first, mirroring macOS AppleAVD.kext
++	 * CAvdM3Mcpu::disableMCPUE() (disasm, macOS 15.7.1 v865, t8103). */
++	writel_relaxed(AVD_RUN_CTRL_UNK_STOP, avd->mbox + AVD_REG_RUN_CTRL);
++	writel_relaxed(1, avd->mbox + AVD_REG_FLAG0_CLR);
++	writel_relaxed(0, avd->mbox + AVD_REG_MCPUE_UNK10);
++	writel_relaxed(0, avd->mbox + AVD_REG_MCPUE_UNK50);
++
+ 	memcpy_toio(avd->code, avd->fw->data, avd->fw->size);
+ 
++	dev_info(avd->dev,
++		 "AVDBG boot: fw[0..2]=%08x %08x %08x rb=%08x %08x %08x rst=%d\n",
++		 ((u32 *)avd->fw->data)[0], ((u32 *)avd->fw->data)[1],
++		 ((u32 *)avd->fw->data)[2],
++		 readl_relaxed(avd->code), readl_relaxed(avd->code + 4),
++		 readl_relaxed(avd->code + 8),
++		 avd->rstc ? reset_control_status(avd->rstc) : -999);
++
+ 	dev_info(avd->dev, "AVDBG boot: fw %zu bytes, hw %04x\n",
+ 		 avd->fw->size, readl_relaxed(avd->ctrl));
+ 
++	/* Power up the coprocessor, mirroring CAvdM3Mcpu::enableMCPUE().
++	 * The +0x50/+0x68/+0x74 control writes are part of every macOS boot;
++	 * where the boot chain leaves them disabled (observed on j293) the
++	 * CM3 never sets FLAG0 without them.  No-op where already enabled
++	 * (j274), so this is safe to run unconditionally. */
++	writel_relaxed(1, avd->mbox + AVD_REG_MCPUE_UNK50);
++	writel_relaxed(1, avd->mbox + AVD_REG_MCPUE_UNK74);
++	writel_relaxed(1, avd->mbox + AVD_REG_MCPUE_UNK68);
+ 	writel_relaxed(AVD_MBOX_ENABLE, avd->mbox + AVD_REG_MBOX1_STATUS);
+ 	writel_relaxed(AVD_MBOX1_NOT_EMPTY, avd->mbox + AVD_REG_MBOX_IRQ_ENABLE);
+ 	writel_relaxed(AVD_RUN_CTRL_UNK_RUN, avd->mbox + AVD_REG_RUN_CTRL);
++	dev_info(avd->dev, "AVDBG boot: run_ctrl rb=%08x\n",
++		 readl_relaxed(avd->mbox + AVD_REG_RUN_CTRL));
+ 
+ 	/* wait for cm3 to boot */
+ 	ret = readl_poll_timeout(avd->mbox + AVD_REG_FLAG0_SET,
+diff --git a/drivers/media/platform/apple/avd/avd-regs.h b/drivers/media/platform/apple/avd/avd-regs.h
+index 388f3e648..fc845568f 100644
+--- a/drivers/media/platform/apple/avd/avd-regs.h
++++ b/drivers/media/platform/apple/avd/avd-regs.h
+@@ -19,4 +19,15 @@
+ #define AVD_REG_FLAG0_SET	0x90
+ #define AVD_REG_FLAG0_CLR	0x98
+ 
++/*
++ * Coprocessor (CM3) power/clock control registers in the mailbox page,
++ * written by macOS CAvdM3Mcpu::enableMCPUE()/disableMCPUE() on every boot.
++ * +0x50 is cleared then set around the firmware load; +0x68/+0x74 are set
++ * before RUN_CTRL.  Without these the CM3 never starts on some machines.
++ */
++#define AVD_REG_MCPUE_UNK10	0x10
++#define AVD_REG_MCPUE_UNK50	0x50
++#define AVD_REG_MCPUE_UNK68	0x68
++#define AVD_REG_MCPUE_UNK74	0x74
++
+ #endif /* AVD_REGS_H_ */
+diff --git a/drivers/pmdomain/apple/pmgr-pwrstate.c b/drivers/pmdomain/apple/pmgr-pwrstate.c
+index 4efe0bea4..4e72d1c26 100644
+--- a/drivers/pmdomain/apple/pmgr-pwrstate.c
++++ b/drivers/pmdomain/apple/pmgr-pwrstate.c
+@@ -117,6 +117,9 @@ static int apple_pmgr_ps_set(struct generic_pm_domain *genpd, u32 pstate, bool a
+ 		dev_err(ps->dev, "PS %s: Failed to reach power state 0x%x (now: 0x%x)\n",
+ 			genpd->name, pstate, reg);
+ 
++	dev_err(ps->dev, "AVDBG ps_set: %s state 0x%x ret=%d cur=0x%x\n",
++		genpd->name, pstate, ret, cur);
++
+ 	if (auto_enable) {
+ 		/* Not all devices implement this; this is a no-op where not implemented. */
+ 		reg |= APPLE_PMGR_AUTO_ENABLE;
+-- 
+2.47.3
+
