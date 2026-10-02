@@ -145,3 +145,39 @@ baseline and document deviations; do not require firmware upgrades.
 2. Compare register dumps (pmgr 0x400/0x410, ctrl hw-version read) with
    a working machine of any model — held in-branch until data exists.
 3. Update m1n1 to latest (cheap, minor hope).
+
+## Linux-side baseline for the macOS diff (2026-10-02, worktree @08bd715e0)
+
+Facts established from `~/linux-m1-avd-wt` (t8103, driver =
+drivers/media/platform/apple/avd):
+
+- **MMIO map** (t8103.dtsi `avd@268000000`): code 0x269080000+0xc000,
+  sram 0x26908c000+0xc000, mbox 0x269098000+0x4000, ctrl 0x269100000+0x10000.
+  IRQs AIC 540/541 = ioreg interrupts [0x21c,0x21d] ✓.
+- **Boot sequence** (`avd_boot`, avd-hw.c): memcpy fw→code; mbox+0x5c=ENABLE;
+  mbox+0x48=NOT_EMPTY; mbox+0x08 RUN_CTRL=1; poll mbox+0x90==1 (10 ms).
+  No reset assert/deassert here — `avd->rstc` is only used by the watchdog
+  path (`avd_reset`). No clocks. No ADS interaction.
+- **Reset** (`resets = <&ps_avd_sys>`): pmgr-pwrstate toggles the avd_sys PS
+  register RESET(bit31) + DEV_DISABLE(bit10). This is the PS-register reset,
+  NOT the macOS `function-avd_reset` → pmgr function **"ARST"** mechanism,
+  for which Linux has no driver at all (no `function-*` support anywhere).
+- **Power**: ps_avd_sys = pmgr 0x23b700000 + 0x410; PS_TARGET(3:0),
+  PS_ACTUAL(7:4); ACTIVE=0xf reached per earlier traces. **Bit13 (0x2000) is
+  set at all times and is not defined/used in the Linux driver** — candidate
+  meaning: clock-gate/ISO hint; check against macOS disasm.
+- **macOS-only mechanisms to look for in the kext disasm**: ARST pmgr
+  function call, clock-ids [0x15d] + gates [0x12a,0x12c,0x12d] enables,
+  fast-clock switch, ADS valid (0x7f0) wait before FW RUN, PwmReset
+  (DT-conditional per kext string "No avd pwm reset, pls check device tree
+  settings!!" — j293 DT has the properties; j274's may lack them, which
+  would explain why j274 boots without any of this).
+
+## Live module testing — STOPPED, see AVD_LIVE_TEST_LOG.md
+
+2026-10-02 evening: built a staged debugfs test harness in a worktree,
+ran one end-to-end test → **hard hang + spontaneous reboot**; the next
+boot then crashed again while fully idle. Evidence points to the test
+leaving retained AVD/SoC state that survives warm reboots. Live tests are
+frozen until the kext disasm yields the exact macOS init sequence. Full
+timeline, infrastructure, and safety rules: **`AVD_LIVE_TEST_LOG.md`**.

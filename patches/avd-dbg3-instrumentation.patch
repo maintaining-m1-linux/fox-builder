@@ -1,0 +1,49 @@
+diff --git a/drivers/media/platform/apple/avd/avd-hw.c b/drivers/media/platform/apple/avd/avd-hw.c
+index cdc012b0d..47a98b022 100644
+--- a/drivers/media/platform/apple/avd/avd-hw.c
++++ b/drivers/media/platform/apple/avd/avd-hw.c
+@@ -2,6 +2,7 @@
+ 
+ #include "linux/dev_printk.h"
+ #include <linux/iopoll.h>
++#include <linux/reset.h>
+ 
+ #include "avd.h"
+ #include "avd-regs.h"
+@@ -51,12 +52,22 @@ int avd_boot(struct avd_dev *avd)
+ 
+ 	memcpy_toio(avd->code, avd->fw->data, avd->fw->size);
+ 
++	dev_info(avd->dev,
++		 "AVDBG boot: fw[0..2]=%08x %08x %08x rb=%08x %08x %08x rst=%d\n",
++		 ((u32 *)avd->fw->data)[0], ((u32 *)avd->fw->data)[1],
++		 ((u32 *)avd->fw->data)[2],
++		 readl_relaxed(avd->code), readl_relaxed(avd->code + 4),
++		 readl_relaxed(avd->code + 8),
++		 avd->rstc ? reset_control_status(avd->rstc) : -999);
++
+ 	dev_info(avd->dev, "AVDBG boot: fw %zu bytes, hw %04x\n",
+ 		 avd->fw->size, readl_relaxed(avd->ctrl));
+ 
+ 	writel_relaxed(AVD_MBOX_ENABLE, avd->mbox + AVD_REG_MBOX1_STATUS);
+ 	writel_relaxed(AVD_MBOX1_NOT_EMPTY, avd->mbox + AVD_REG_MBOX_IRQ_ENABLE);
+ 	writel_relaxed(AVD_RUN_CTRL_UNK_RUN, avd->mbox + AVD_REG_RUN_CTRL);
++	dev_info(avd->dev, "AVDBG boot: run_ctrl rb=%08x\n",
++		 readl_relaxed(avd->mbox + AVD_REG_RUN_CTRL));
+ 
+ 	/* wait for cm3 to boot */
+ 	ret = readl_poll_timeout(avd->mbox + AVD_REG_FLAG0_SET,
+diff --git a/drivers/pmdomain/apple/pmgr-pwrstate.c b/drivers/pmdomain/apple/pmgr-pwrstate.c
+index 4efe0bea4..4e72d1c26 100644
+--- a/drivers/pmdomain/apple/pmgr-pwrstate.c
++++ b/drivers/pmdomain/apple/pmgr-pwrstate.c
+@@ -117,6 +117,9 @@ static int apple_pmgr_ps_set(struct generic_pm_domain *genpd, u32 pstate, bool a
+ 		dev_err(ps->dev, "PS %s: Failed to reach power state 0x%x (now: 0x%x)\n",
+ 			genpd->name, pstate, reg);
+ 
++	dev_err(ps->dev, "AVDBG ps_set: %s state 0x%x ret=%d cur=0x%x\n",
++		genpd->name, pstate, ret, cur);
++
+ 	if (auto_enable) {
+ 		/* Not all devices implement this; this is a no-op where not implemented. */
+ 		reg |= APPLE_PMGR_AUTO_ENABLE;

@@ -128,3 +128,33 @@ enabled (j274) are unaffected; on j293 the CM3 never sets FLAG0 without them.
 2. Firmware-side: macOS runs the same avd-fw-v2-t0 open-source firmware
    entry layout; FLAG0 polling register/values match Linux exactly, so the
    remaining surface is the enable path documented above.
+
+## 2026-10-02 update: m1n1 original bring-up RE found
+
+`m1n1/proxyclient/m1n1/fw/avd/__init__.py` (AsahiLinux/m1n1) is the
+original AVD bring-up reverse engineering and predates/confirms this
+document: `AVDDevice.boot()` and `avd_mcpu_start()` implement exactly the
+sequences decoded above from macOS 15.7.1 AppleAVD v865, with two
+additions the upstream Linux driver never got:
+
+1. Before the M3 start: `0x269000000 = 0xfff` (macOS DevicePwrOn — the
+   ADS block), dart-avd masks at 0x269010060/68/6c, SRAM clear,
+   `wrap_ctrl_device_init()` (0x1400014/18, 0x1070000, 0x1104064=3,
+   five IRQ-clear writes at 0x110c*, 0x1070024=0x26907000) and
+   `avd_dma_tunables_stage0()` (~150 registers in the 0x1100000 block).
+2. In the M3 start itself: `+0x10 = 2` ("enable mailbox interrupts")
+   immediately before +0x48=8 and RUN_CTRL=1 — absent from both the old
+   Linux driver and the first MCPUE patch.
+
+The upstream Linux driver skipped all of this because on the RE machines
+(j274) the hardware/boot chain already provides those states. j293 does
+not get them for free.
+
+Implementations of `pmgr_adt_power_enable()` (m1n1/src/pmgr.c) show the
+ADT `clock-gates` property ([0x12a,0x12c,0x12d] on avd, plus dart-avd's
+own) is a list of pmgr ps devices to set ACTIVE(0xf) — the one macOS
+step still not replicated in Linux (needs the t8103 ADT pmgr device
+table to map ids to ps offsets).  The avd5 kernel dumps the pmgr ps
+registers around avd_sys (0x23b700000+0x3a0..0x490) at boot so the gate
+candidates can be identified from dmesg if register parity alone is not
+sufficient.
