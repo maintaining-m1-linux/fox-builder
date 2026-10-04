@@ -1,0 +1,14 @@
+#!/bin/sh
+# Include Apple AVD firmware in the initramfs so the built-in apple-avd
+# driver (CONFIG_VIDEO_APPLE_AVD=y) can load it at early-init probe time,
+# before the rootfs is mounted.  t8103 uses apple/avd-fw-v2-t0.bin (48 KiB).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+if [ -d /usr/lib/firmware/apple ]; then
+    mkdir -p "$DESTDIR/usr/lib/firmware/apple"
+    cp -a /usr/lib/firmware/apple/avd-fw-*.bin "$DESTDIR/usr/lib/firmware/apple/"
+fi
