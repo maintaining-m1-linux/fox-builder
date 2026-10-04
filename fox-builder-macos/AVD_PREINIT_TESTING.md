@@ -85,3 +85,16 @@ Interpretation guide:
 - The `7.0.13-fairydust` backup kernel in /boot is never removed.
 - Do not delete kernels from /boot while testing; the partition is small
   (1.5G) — plan space before adding avd9+.
+
+## Gotchas learned on hardware
+
+- **Ring buffer wrap**: the PM debug instrumentation (commit `05e0fb8a3`)
+  dump_stacks on every genpd/ps_set operation and floods the default dmesg
+  buffer within seconds; the AVDBG preinit/boot lines from the first ~2s of
+  boot were evicted before they could be read.  Fixed system-wide on
+  2026-10-04 by adding `log_buf_len=8M` to
+  `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` (applies to every
+  kernel, including avd4).  If lines are still missing, pass
+  `log_buf_len=16M` manually for that boot.
+- **avd7 was removed** on 2026-10-04 (it panicked at boot, useless);
+  /boot holds avd4 (GRUB default), avd8, and the 7.0.13 backup.
