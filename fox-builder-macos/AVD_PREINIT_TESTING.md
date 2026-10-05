@@ -26,6 +26,7 @@ needed to bisect:
 | `0x08` | wrap ctrl init table (10 regs) |
 | `0x10` | DMA tunables table (~120 regs) |
 | `0x20` | pmgr ps dump (read-only diagnostic) |
+| `0x40` | ads-probe: ADS reads → DevicePwrOn write w/ readback → ADS status poll (runs first; avd9+) |
 
 Default `0` runs **no** preinit — avd4-equivalent (MCPUE boot sequence
 only), always safe to boot.
