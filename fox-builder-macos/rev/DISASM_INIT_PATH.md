@@ -1,5 +1,10 @@
 # AppleAVD.kext (v865, macOS 15.7.1, arm64e) — AVD CM3 init/power-on 경로 MMIO 시퀀스 복원
 
+> **ERRATA (2026-10-05): 일부 슬롯 추측과 A2 해석이 틀렸습니다. 런타임 wrap-ctrl은
+> CAvdWrapCtrlViola(베이스 클래스 아님), A2는 0x1000000<-0xfff 쓰기가 아니라
+> power-state=2 요청입니다. 정정 전체는 AVD_POWER_RE.md를 따릅니다.**
+
+
 대상: MacBook Pro 13" M1 2020 (j293, t8103, Viola). `AppleAVD.__TEXT_EXEC.bin` (base 0xfffffe0009226370),
 `AppleAVD.__TEXT.bin` (base 0xfffffe000715a500), `AppleAVD.__DATA_CONST.bin` (base 0xfffffe0007e160d8) 디스어셈블.
 도구: `aarch64-linux-gnu-objdump -D -b binary -m aarch64`. vtable 포인터 복원 규칙: 저장값(하위 32bit) + 0x7004000 = 실제 TEXT_EXEC 주소
