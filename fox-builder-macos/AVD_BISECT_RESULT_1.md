@@ -83,3 +83,41 @@ j293.
 6. Runtime test via `/sys/module/apple_avd/parameters/preinit_mask` + a
    `/dev/video0` open remains available but is moot for the panic question
    (ordering ruled out by experiment 1).
+
+## Single-stage matrix (avd9, GRUB echo markers distinguish GRUB vs kernel)
+
+All entries show all three GRUB markers ("Loading Linux", "Loading initial
+ramdisk", "kernel+initrd loaded, handing off") and only then die — GRUB is
+fully exonerated; the kernel hangs for every non-zero mask:
+
+| mask | stage | result |
+|---|---|---|
+| 0x00 | none | boots (baseline) |
+| 0x02 | dart masks | hang after handoff |
+| 0x04 | code+sram clear | hang after handoff |
+| 0x08 | wrap init | hang after handoff |
+| 0x10 | dma tunables | hang after handoff |
+
+Only the code window (fw upload), mbox page, ctrl page, and the pages the
+apple-dart driver itself touches ever respond; everything else in the
+0x268000000 complex reads-hangs. Also established: the display console
+(fbcon) comes up after the hang point, so no on-screen kernel logs exist
+before ~2s — screen diagnosis is impossible for these hangs; the GRUB
+markers are the only reliable pre-kernel signal.
+
+## perf-state floor hypothesis: FALSIFIED
+
+/dev/mem reads (works for pmgr MMIO; never read AVD MMIO from userspace —
+it hangs the bus) show the PMGR_PS_AUTO floor bits (27:24) are already 0xf
+on both AVD_SYS and MMX while suspended: AVD_SYS=0x0F002300,
+MMX=0x0F000300. macOS set_perf_state_floor cannot be the missing step —
+iBoot/SMC defaults already carry it.
+
+## Next: static RE of the remaining macOS-only steps
+
+The unblock must be one of: (a) the clock-gate request behind
+`enableDeviceClockWrapper` (likely SMC-mediated for the virtual gates
+AVD-SYS-V / AVD-SOC-VNOM / AVD-SOC-VMAX), (b) the ARST function-register
+write (function-avd_reset = [0x8b "ARST" 0x66] → pmgr+0x22c), or (c) an
+explicit voltage-rail request. Disassemble AppleAVD.__TEXT_EXEC to trace
+both call paths to their final register/SMC writes.
