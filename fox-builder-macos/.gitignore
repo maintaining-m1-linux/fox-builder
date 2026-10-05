@@ -6,3 +6,4 @@ rev/ioreg_*.txt
 rev/avd_kernel_log.txt
 rev/avd_kext_strings.txt
 rev/avd_strings_linkedit_interesting.txt
+rev/kexts/

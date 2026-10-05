@@ -27,6 +27,20 @@ ncmds.times do
   off += cmdsize
 end
 
+# collect main-header LC_SEGMENT_64 (cmd 0x19) once: vmaddr, vmsize, fileoff, filesize, segname
+segs = []
+ncmds, = data[16, 8].unpack('L')
+so = 32
+ncmds.times do
+  cmd, cmdsize = data[so, 8].unpack('LL')
+  if cmd == 0x19
+    segname = data[so+8, 16].unpack1('Z*')
+    vmaddr, vmsize, fileoff, filesize = data[so+24, 32].unpack('QQQQ')
+    segs << { name: segname, vmaddr: vmaddr, vmsize: vmsize, fileoff: fileoff, filesize: filesize }
+  end
+  so += cmdsize
+end
+
 case MODE
 when 'list'
   entries.each { |e| printf "%-60s vmaddr=0x%016x fileoff=0x%08x vmsize=0x%08x\n", e[:name], e[:vmaddr], e[:fileoff], e[:vmsize] }
@@ -34,19 +48,6 @@ when 'extract'
   re = Regexp.new(ARGV[2])
   outdir = ARGV[3] || '.'
   FileUtils.mkdir_p(outdir)
-  # collect main-header LC_SEGMENT_64 (cmd 0x19): vmaddr, vmsize, fileoff, filesize, segname
-  segs = []
-  ncmds, = data[16, 8].unpack('L')
-  so = 32
-  ncmds.times do
-    cmd, cmdsize = data[so, 8].unpack('LL')
-    if cmd == 0x19
-      segname = data[so+8, 16].unpack1('Z*')
-      vmaddr, vmsize, fileoff, filesize = data[so+24, 32].unpack('QQQQ')
-      segs << { name: segname, vmaddr: vmaddr, vmsize: vmsize, fileoff: fileoff, filesize: filesize }
-    end
-    so += cmdsize
-  end
   entries.select { |e| e[:name] =~ re }.each do |e|
     seg = segs.find { |s| s[:vmaddr] <= e[:vmaddr] && e[:vmaddr] < s[:vmaddr] + s[:vmsize] }
     raise "no segment covers #{e[:name]} vmaddr=#{e[:vmaddr].to_s(16)}" unless seg
@@ -84,6 +85,56 @@ when 'extract'
       m.puts "symtab #{symtab.inspect}" if symtab
     end
     printf "extracted %-50s base=%016x size=%#08x (%d segs)\n", e[:name], base, top-base, ksegs.size
+  end
+when 'segments'
+  # per-kext directory of flat per-segment bins + section map (no LINKEDIT)
+  re = Regexp.new(ARGV[2])
+  outroot = ARGV[3] || 'kexts'
+  FileUtils.mkdir_p(outroot)
+  entries.select { |e| e[:name] =~ re }.each do |e|
+    seg = segs.find { |s| s[:vmaddr] <= e[:vmaddr] && e[:vmaddr] < s[:vmaddr] + s[:vmsize] }
+    raise "no segment covers #{e[:name]}" unless seg
+    fo = seg[:fileoff] + (e[:vmaddr] - seg[:vmaddr])
+    inner = data[fo, 0x8000]
+    raise "bad inner magic" unless inner[0,4].unpack1('L') == 0xfeedfacf
+    in_ncmds, = inner[16, 8].unpack('L')
+    ksegs = []
+    io = 32
+    in_ncmds.times do
+      icmd, ics = inner[io,8].unpack('LL')
+      if icmd == 0x19
+        segname = inner[io+8,16].unpack1('Z*')
+        vmaddr, vmsize, fileoff, filesize = inner[io+24,32].unpack('QQQQ')
+        nsect = inner[io+64,4].unpack1('L')
+        sects = []
+        nsect.times do |si|
+          so = io + 72 + si*80
+          sects << {
+            name: inner[so,16].unpack1('Z*'),
+            vmaddr: inner[so+32,8].unpack1('Q'),
+            size:   inner[so+40,8].unpack1('Q'),
+            fileoff:(inner[so+48,8].unpack1('Q') & 0x0fffffff),
+          }
+        end
+        ksegs << { name: segname, vmaddr: vmaddr, vmsize: vmsize, fileoff: fileoff, filesize: filesize, sects: sects }
+      end
+      io += ics
+    end
+    short = e[:name].split('.').last
+    dir = File.join(outroot, short)
+    FileUtils.mkdir_p(dir)
+    File.open(File.join(dir, short + '.map.txt'), 'w') do |m|
+      m.puts "kext=#{e[:name]} entry_vmaddr=0x#{e[:vmaddr].to_s(16)} text_header_fileoff=0x#{fo.to_s(16)}"
+      ksegs.each do |s|
+        next if s[:name] == '__LINKEDIT'
+        bin = data[s[:fileoff], s[:filesize]]
+        fn = "#{short}.#{s[:name]}.bin"
+        File.binwrite(File.join(dir, fn), bin)
+        m.puts format("seg %-16s vmaddr=0x%016x filesize=0x%-10x file=%s", s[:name], s[:vmaddr], s[:filesize], fn)
+        s[:sects].each { |sc| m.puts format("  sect %-18s vmaddr=0x%016x size=0x%-10x kc_fileoff=0x%x", sc[:name], sc[:vmaddr], sc[:size], sc[:fileoff]) }
+      end
+    end
+    printf "segments  %-50s -> %s/\n", e[:name], dir
   end
 else
   abort "unknown mode #{MODE}"
