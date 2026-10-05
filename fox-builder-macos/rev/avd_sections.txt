@@ -1,0 +1,21 @@
+SEG __TEXT vmaddr=fffffe000715a500 vmsize=e44f8 fileoff=156500 nsect=3
+  __os_log             vmaddr=fffffe000715ac68 size=0x00015cae fileoff=0x00156c68
+  __cstring            vmaddr=fffffe0007170916 size=0x00005473 fileoff=0x0016c916
+  __const              vmaddr=fffffe0007175dc0 size=0x000c8c38 fileoff=0x600171dc0
+SEG __TEXT_EXEC vmaddr=fffffe0009226370 vmsize=59abc fileoff=2222370 nsect=2
+  __text               vmaddr=fffffe0009226370 size=0x00059abc fileoff=0x202222370
+  __auth_stubs         vmaddr=fffffe000927fe2c size=0000000000 fileoff=0x200000000
+SEG __DATA vmaddr=fffffe000c31bf00 vmsize=136c fileoff=5317f00 nsect=3
+  __data               vmaddr=fffffe000c31bf00 size=0x000012dc fileoff=0x305317f00
+  __common             vmaddr=fffffe000c31d1e0 size=0x00000078 fileoff=0x300000000
+  __bss                vmaddr=fffffe000c31d258 size=0x00000014 fileoff=0x200000000
+SEG __DATA_CONST vmaddr=fffffe0007e160d8 vmsize=8328 fileoff=e120d8 nsect=8
+  __auth_got           vmaddr=fffffe0007e160d8 size=0x00000390 fileoff=0x300e120d8
+  __got                vmaddr=fffffe0007e16468 size=0x000000d8 fileoff=0x300e12468
+  __auth_ptr           vmaddr=fffffe0007e16540 size=0x00000008 fileoff=0x300e12540
+  __mod_init_func      vmaddr=fffffe0007e16548 size=0x00000010 fileoff=0x300e12548
+  __mod_term_func      vmaddr=fffffe0007e16558 size=0x00000010 fileoff=0x300e12558
+  __const              vmaddr=fffffe0007e16568 size=0x000042d8 fileoff=0x300e12568
+  __kalloc_type        vmaddr=fffffe0007e1a840 size=0x00002cc0 fileoff=0x300e16840
+  __kalloc_var         vmaddr=fffffe0007e1d500 size=0x00000f00 fileoff=0x300e19500
+SEG __LINKEDIT vmaddr=fffffe000c59c000 vmsize=1621245 fileoff=5598000 nsect=0

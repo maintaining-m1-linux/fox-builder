@@ -1,0 +1,6 @@
+# AppleAVD kext (com.apple.driver.AppleAVD v865) flat per-segment binaries (from macOS 15.7.1 arm64e kernelcache)
+# disasm: aarch64-linux-gnu-objdump -D -b binary -m aarch64 --adjust-vma=0x<vmaddr> <file>
+__TEXT         file=AppleAVD.__TEXT.bin            vmaddr=0xfffffe000715a500 filesize=0xe44f8
+__TEXT_EXEC    file=AppleAVD.__TEXT_EXEC.bin       vmaddr=0xfffffe0009226370 filesize=0x59abc
+__DATA         file=AppleAVD.__DATA.bin            vmaddr=0xfffffe000c31bf00 filesize=0x136c
+__DATA_CONST   file=AppleAVD.__DATA_CONST.bin      vmaddr=0xfffffe0007e160d8 filesize=0x8328
