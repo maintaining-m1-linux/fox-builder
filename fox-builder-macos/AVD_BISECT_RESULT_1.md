@@ -50,23 +50,36 @@ j293.
 2. `DevicePwrOn` 0x1000000←0xfff.
 3. fw load → M3 start → DeviceInit/wrap → ADS valid poll (mask 0x7f0).
 
-## Open questions / next experiments
+## Results / next experiments
 
-1. **Ordering**: at the boot-time avd_boot (~1.95s) the surviving dmesg
-   (ring buffer wrapped, 0–2.2s lost) cannot tell whether AVD_SYS was
-   actually ACTIVE. At runtime the domain is re-powered on every
-   `/dev/video0` open. Runtime test on the running avd8 system:
-   `echo 0x01 > /sys/module/apple_avd/parameters/preinit_mask` then open
-   `/dev/video0` → avd_boot reruns stage 1 with AVD_SYS freshly on.
-   Decisive for ordering; ~90% likely panics (session dies).
-2. **Read vs write fault**: nobody has ever read `0x269000000` on j293 Linux
-   (avd6 removed reads pre-emptively; stage 1 always ran first in avd5/6/7).
-   If the runtime test still panics, add an avd9 "adsprobe" stage (reads with
-   logging, then write+readback) to characterize which access faults.
-3. **Clock / perf-state floor**: A1 (`enableDeviceClockWrapper`) is the
-   remaining macOS-vs-Linux difference. Clock provider for ID 0x15d not yet
-   located in DT/dumps (no nclk node/driver in this tree).
-4. **Voltage rails**: AVD-SOC-VNOM/VMAX are parentless virtual devices —
+1. **DONE — boot-time ordering ruled out.** The avd9 mask=0x00 boot log
+   (log_buf_len=8M) shows `ps_set: avd_sys state 0xf` ~20ms *before* the
+   avd_boot attempt at 1.93s, i.e. AVD_SYS+MMX were provably ACTIVE during
+   the mask=0x01 panic.  Not a power-ordering problem.
+2. **DONE — adsprobe (0x40): hard hang, not a panic.** The very first ADS
+   read (`readl(0x269002010)`) stalled the bus forever: no backtrace is
+   possible, and because `quiet` was on the cmdline not even the AVDBG
+   banner reached the screen — the machine sat at the GRUB "Loading initial
+   ramdisk..." text.  The hung boot left no journal entry (journald starts
+   after the ~1.9s hang point; verified via `journalctl --list-boots`), no
+   pstore (not configured), and the ring buffer died with the reset.  The
+   ADS aperture is completely unreachable on j293 (reads don't fault, they
+   hang) even with AVD_SYS+MMX ACTIVE — clock (ID 0x15d, nobody enables
+   it), ARST reset (function register below), or the SMC-managed rails.
+3. **pmgr function registers (read-only probe from a live boot):** Apple
+   function properties decode as `<u32 offset>, <4CC type>, [args]` with the
+   register at `pmgr_base + offset*4`.  `function-avd_reset = [0x8b "ARST" 0x66]`
+   → pmgr+0x22c, which reads back 0.  The ARST write semantics are unknown
+   (the arg 0x66 is a command value, not a bit index), so do NOT poke it
+   blindly.  Wide-area dump: 0x220=ff 0x228=2ff 0x22c=0 0x230=2ff 0x238=300.
+4. **NEXT — mask=0x3e (all preinit except the ADS write):** tests whether
+   the rest of the sequence is safe and whether flag0 flips without ADS.
+   The GRUB test entry now runs without `quiet` so a hang leaves the last
+   AVDBG line on the console — photograph the screen in that case.
+5. **Voltage rails**: AVD-SOC-VNOM/VMAX are parentless virtual devices —
    powering them means an SMC interaction that neither Linux nor m1n1
    performs explicitly. If the SMC doesn't auto-sequence the rail with
    AVD_SYS, the block is clocked-but-undervolted.
+6. Runtime test via `/sys/module/apple_avd/parameters/preinit_mask` + a
+   `/dev/video0` open remains available but is moot for the panic question
+   (ordering ruled out by experiment 1).
